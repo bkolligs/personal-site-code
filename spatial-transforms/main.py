@@ -1,3 +1,6 @@
+"""Spatial transforms explanations."""
+
+import time
 import open3d as o3d
 import open3d.visualization.gui as gui
 import numpy as np
@@ -74,8 +77,12 @@ def transform_batch_einsum(
     min_distance: float = 0.2,
     max_distance: float = 1.0,
     n_samples: int = 10,
+    n_standoff_samples: int = 10,
     cone_angle: float = 0.15,
+    vis: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
+
+    start_time = time.time()
 
     # 1. We start by sampling points on the unit hemisphere
     phi = np.random.uniform(0, 2 * np.pi, size=n_samples)
@@ -130,31 +137,34 @@ def transform_batch_einsum(
     frames = np.einsum("ij,bjk->bik", normal_frame, frames, optimize="path")
 
     # 5. Apply standoff
-    standoffs = np.linspace(min_distance, max_distance, n_samples)
+    standoffs = np.linspace(min_distance, max_distance, n_standoff_samples)
 
     translations = np.tile(np.eye(4), reps=(len(standoffs), 1, 1))
     translations[:, 2, 3] = -standoffs
-    tiled_poses = np.kron(frames, np.ones((n_samples, 1, 1)))
+    tiled_poses = np.kron(frames, np.ones((n_standoff_samples, 1, 1)))
     tiled_standoff_poses = np.tile(translations, reps=(len(frames), 1, 1))
     standoff_poses = np.einsum(
         "bij,bjk->bik", tiled_poses, tiled_standoff_poses, optimize="path"
     )
 
     console.print(
-        f"Transformed approach frames of shape {frames.shape} to the normal frame"
+        f"Transformed approach frames of shape {frames.shape} to the normal frame in {1000 * (time.time() - start_time)}ms"
     )
 
-    origin_mesh = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.2)
-    normal_mesh = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
-    normal_mesh.transform(normal_frame)
-    approach_frames = []
-    for f in standoff_poses:
-        fm = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.05)
-        fm.transform(f)
-        approach_frames.append(fm)
-    geometries = [origin_mesh, *approach_frames, normal_mesh]
+    if vis:
+        start_time = time.time()
+        origin_mesh = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.2)
+        normal_mesh = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
+        normal_mesh.transform(normal_frame)
+        approach_frames = []
+        for f in standoff_poses:
+            fm = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.05)
+            fm.transform(f)
+            approach_frames.append(fm)
+        geometries = [origin_mesh, *approach_frames, normal_mesh]
 
-    o3d.visualization.draw_geometries(geometries)
+        o3d.visualization.draw_geometries(geometries)
+        console.print(f"Prepared vis in {time.time() - start_time}s")
 
 
 def transform_inverse() -> None:
@@ -257,12 +267,43 @@ def main():
         default=1.0,
         help="The maximum standoff distance of the approach frames",
     )
+    einsum_parser.add_argument(
+        "-s",
+        "--num_samples",
+        type=int,
+        default=10,
+        help="The total number of random approach directions.",
+    )
+    einsum_parser.add_argument(
+        "-ss",
+        "--num_standoff_samples",
+        type=int,
+        default=10,
+        help="The total number of standoff samples",
+    )
+    einsum_parser.add_argument(
+        "-c",
+        "--cone_angle",
+        type=float,
+        default=0.15,
+        help="The cone angle used when calculating the hemispherical point samples",
+    )
+    einsum_parser.add_argument(
+        "-nv",
+        "--no_vis",
+        action="store_false",
+        help="Turn off the visualization with Open3D.",
+    )
     einsum_parser.set_defaults(
         func=lambda args: transform_batch_einsum(
             normal=args.normal,
             point=args.point,
+            n_samples=args.num_samples,
+            n_standoff_samples=args.num_standoff_samples,
+            cone_angle=args.cone_angle,
             min_distance=args.min_distance,
             max_distance=args.max_distance,
+            vis=args.no_vis,
         )
     )
 
